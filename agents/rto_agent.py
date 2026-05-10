@@ -7,24 +7,12 @@ operational recommendation. No outbound notifications — analysis only.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 from decimal import Decimal
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import Order, Shipment
+from chat.tools import get_rto_orders_data
 from db.schema import AgentResult, AgentRunLog
-
-
-@dataclass
-class RtoOrderInsight:
-    internal_order_id: str
-    customer_name: str
-    amount: str
-    currency: str
-    shipment_id: str
-    courier_name: str
 
 
 class RtoAgent:
@@ -40,42 +28,35 @@ class RtoAgent:
 
     def run(self, db: Session) -> AgentResult:
         logs: list[AgentRunLog] = []
-        logs.append(AgentRunLog(step="start", detail="Scanning normalized orders and shipments"))
-
-        stmt = (
-            select(Order, Shipment)
-            .join(Shipment, Shipment.internal_order_id == Order.internal_order_id)
-            .where(Shipment.shipment_status == "rto")
+        logs.append(
+            AgentRunLog(
+                step="start",
+                detail="Fetching RTO cohort via deterministic tool get_rto_orders_data.",
+            )
         )
-        rows = db.execute(stmt).all()
 
-        high_value: list[RtoOrderInsight] = []
-        for order, ship in rows:
-            if Decimal(order.amount) >= self.min_amount:
-                high_value.append(
-                    RtoOrderInsight(
-                        internal_order_id=order.internal_order_id,
-                        customer_name=order.customer_name,
-                        amount=str(order.amount),
-                        currency=order.currency,
-                        shipment_id=ship.internal_shipment_id,
-                        courier_name=ship.courier_name,
-                    )
-                )
+        rto_all = get_rto_orders_data(db, min_amount=0.0)
+        rto_high_value = get_rto_orders_data(db, min_amount=float(self.min_amount))
 
         logs.append(
             AgentRunLog(
                 step="evaluate",
-                detail=f"Found {len(rows)} RTO shipment rows; "
-                f"{len(high_value)} are high-value (>= {self.min_amount}).",
+                detail=(
+                    f"Tool returned {rto_all.value} total RTO orders; "
+                    f"{rto_high_value.value} are high-value (>= {self.min_amount})."
+                ),
             )
         )
 
-        if not high_value:
+        if int(rto_high_value.value) == 0:
             logs.append(AgentRunLog(step="done", detail="No high-value RTO pattern detected"))
             return AgentResult(
                 trigger_reason="No RTO shipments met the high-value threshold.",
-                analyzed_data={"rto_shipment_count": len(rows), "high_value_rto_count": 0},
+                analyzed_data={
+                    "rto_order_count": int(rto_all.value),
+                    "high_value_rto_count": int(rto_high_value.value),
+                    "citations": [c.model_dump() for c in rto_all.citations],
+                },
                 recommendation="No change suggested based on current thresholds.",
                 run_logs=logs,
             )
@@ -89,7 +70,10 @@ class RtoAgent:
 
         analyzed = {
             "threshold_amount": str(self.min_amount),
-            "high_value_rto": [asdict(x) for x in high_value],
+            "rto_order_count": int(rto_all.value),
+            "high_value_rto_count": int(rto_high_value.value),
+            "high_value_rto": rto_high_value.records,
+            "citations": [c.model_dump() for c in rto_high_value.citations],
         }
         recommendation = (
             "Pause or tighten COD on high-ticket SKUs in lanes showing repeated RTO with the "

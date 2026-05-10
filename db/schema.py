@@ -86,3 +86,50 @@ class AgentResult(BaseModel):
     analyzed_data: dict
     recommendation: str
     run_logs: list[AgentRunLog]
+
+
+class ToolCall(BaseModel):
+    """LLM router output: one deterministic tool + validated arguments."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str
+    arguments: dict = Field(default_factory=dict)
+
+
+class ToolExecutionResult(BaseModel):
+    """
+    Structured deterministic output used for validation and summarization.
+
+    `value` may be numeric, list, or textual depending on the tool metric.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric: str
+    value: int | float | str | dict | list
+    currency: str | None = None
+    calculation: dict = Field(default_factory=dict)
+    filters: dict = Field(default_factory=dict)
+    records: list[dict] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
+
+
+class ChatQueryRequest(BaseModel):
+    """Generic query endpoint request body."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+
+
+class GroundedChatResponse(BaseModel):
+    """Grounded conversational response with traceable tool output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    tool_used: str
+    answer: str
+    structured_data: ToolExecutionResult
+    citations: list[Citation] = Field(default_factory=list)

@@ -255,6 +255,47 @@ def get_order_by_id_data(db: Session, *, internal_order_id: str) -> ToolExecutio
 def get_failed_shipments_data(db: Session) -> ToolExecutionResult:
     return _failed_shipments_result(db)
 
+def get_orders_by_id_delivered_data(db: Session, *, internal_order_id: str) -> ToolExecutionResult: 
+    """Lookup delivered orders by internal_order_id."""
+    stmt = (
+        select(Order)
+        .join(Shipment, Shipment.internal_order_id == Order.internal_order_id)
+        .where(
+            Order.internal_order_id == internal_order_id,
+            Shipment.shipment_status == "delivered",
+        )
+    )
+    order = db.scalars(stmt).first()
+    if order is None:
+        return ToolExecutionResult(
+            metric="order_by_id_delivered",
+            value="not_found",
+            filters={"internal_order_id": internal_order_id},
+            citations=[],
+        )
+
+    prov = crud.latest_provenance_for_entities(
+        db,
+        internal_entity_ids=[internal_order_id],
+        field_names=["amount", "customer_name", "order_status"],
+    )
+    citations = merge_citations_unique(provenance_rows_to_citations(prov))
+
+    return ToolExecutionResult(
+        metric="order_by_id_delivered",
+        value=order.internal_order_id,
+        records=[
+            {
+                "internal_order_id": order.internal_order_id,
+                "customer_name": order.customer_name,
+                "amount": float(order.amount),
+                "currency": order.currency,
+                "order_status": order.order_status,
+            }
+        ],
+        citations=citations,
+    )
+
 
 def _as_chat_answer(metric_result: ToolExecutionResult) -> ChatAnswer:
     """Backwards-compatible wrapper for legacy endpoints expecting ChatAnswer."""

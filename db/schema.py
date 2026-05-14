@@ -60,6 +60,7 @@ class ChatAnswer(BaseModel):
 
     answer: str
     citations: list[Citation] = Field(default_factory=list)
+    tool_used: str | None = None
 
 
 class SyncSummary(BaseModel):

@@ -113,7 +113,7 @@ def chat_revenue(db: Session = Depends(get_db)) -> ChatAnswer:
 @app.get("/chat/rto", response_model=ChatAnswer)
 def chat_rto(question: str, db: Session = Depends(get_db)) -> ChatAnswer:
     grounded = run_grounded_query(db, question)
-    return ChatAnswer(answer=grounded.answer, citations=grounded.citations)
+    return ChatAnswer(answer=grounded.answer, citations=grounded.citations,tool_used=grounded.tool_used)
 
 
 @app.get("/chat/order/{internal_order_id}", response_model=ChatAnswer)

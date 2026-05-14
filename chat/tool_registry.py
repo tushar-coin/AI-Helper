@@ -52,6 +52,12 @@ TOOLS: dict[str, ToolDefinition] = {
         function=tools.get_order_by_id_data,
         arguments_schema={"internal_order_id": {"type": "string", "required": True}},
     ),
+    "get_orders_by_id_delivered": ToolDefinition(
+        name="get_orders_by_id_delivered",
+        description="Lookup delivered orders by internal_order_id.",
+        function=tools.get_orders_by_id_delivered_data,
+        arguments_schema={"internal_order_id": {"type": "string", "required": True}},
+    ),
 }
 
 

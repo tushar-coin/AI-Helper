@@ -98,6 +98,30 @@ class ToolCall(BaseModel):
     arguments: dict = Field(default_factory=dict)
 
 
+class AgentAction(BaseModel):
+    """One bounded loop decision: call a tool or stop with final answer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: str
+    tool_name: str | None = None
+    arguments: dict = Field(default_factory=dict)
+
+
+class AgentStepLog(BaseModel):
+    """Trace for one chat agent loop step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: int
+    action: str
+    tool_name: str | None = None
+    arguments: dict = Field(default_factory=dict)
+    result_metric: str | None = None
+    result_value: int | float | str | dict | list | None = None
+    citations_count: int = 0
+
+
 class ToolExecutionResult(BaseModel):
     """
     Structured deterministic output used for validation and summarization.
@@ -134,3 +158,16 @@ class GroundedChatResponse(BaseModel):
     answer: str
     structured_data: ToolExecutionResult
     citations: list[Citation] = Field(default_factory=list)
+
+
+class MultiStepGroundedChatResponse(BaseModel):
+    """Grounded response produced by a bounded multi-tool chat loop."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    tool_used: list[str]
+    answer: str
+    structured_data: list[ToolExecutionResult]
+    citations: list[Citation] = Field(default_factory=list)
+    run_logs: list[AgentStepLog] = Field(default_factory=list)

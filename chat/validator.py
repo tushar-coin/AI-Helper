@@ -32,3 +32,21 @@ def validate_grounded_answer(answer: str, result: ToolExecutionResult) -> None:
             raise ValueError(
                 f"Detected unsupported numeric claim '{number}' that is absent from tool output."
             )
+
+
+def validate_grounded_answer_against_results(
+    answer: str,
+    results: list[ToolExecutionResult],
+) -> None:
+    """Validate a narrative against multiple deterministic tool results."""
+    numbers = _extract_numbers(answer)
+    if not numbers:
+        return
+    if not any(result.citations for result in results):
+        raise ValueError("Numeric answer cannot be returned without citations.")
+    serialized = json.dumps([result.model_dump() for result in results], default=str)
+    for number in numbers:
+        if number not in serialized:
+            raise ValueError(
+                f"Detected unsupported numeric claim '{number}' that is absent from tool output."
+            )

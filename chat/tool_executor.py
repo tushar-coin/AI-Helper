@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy.orm import Session
 
 from chat.tool_registry import TOOLS
@@ -37,6 +39,22 @@ def _coerce_arguments(tool_name: str, args: dict) -> dict:
             value = str(raw_value)
             if required and not value.strip():
                 raise ValueError(f"Argument {arg_name} cannot be empty")
+            out[arg_name] = value
+        elif arg_type == "array":
+            if isinstance(raw_value, str):
+                try:
+                    value = json.loads(raw_value)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Argument {arg_name} must be an array") from exc
+            else:
+                value = raw_value
+            if not isinstance(value, list):
+                raise ValueError(f"Argument {arg_name} must be an array")
+            if "min_items" in arg_spec and len(value) < int(arg_spec["min_items"]):
+                raise ValueError(f"Argument {arg_name} must have at least {arg_spec['min_items']} items")
+            item_type = (arg_spec.get("items") or {}).get("type")
+            if item_type == "string":
+                value = [str(item) for item in value]
             out[arg_name] = value
         else:
             out[arg_name] = raw_value

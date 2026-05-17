@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.orm import Session
 
 from agents.rto_agent import RtoAgent
-from chat.orchestrator import run_grounded_query
+from chat.orchestrator import run_grounded_query_loop
 from chat import tools as chat_tools
 from db import crud, seed
 from db.database import SessionLocal, get_db, init_db
@@ -27,7 +27,7 @@ from db.schema import (
     AgentResult,
     ChatQueryRequest,
     ChatAnswer,
-    GroundedChatResponse,
+    MultiStepGroundedChatResponse,
     OrderOut,
     PaymentOut,
     ShipmentOut,
@@ -112,8 +112,12 @@ def chat_revenue(db: Session = Depends(get_db)) -> ChatAnswer:
 
 @app.get("/chat/rto", response_model=ChatAnswer)
 def chat_rto(question: str, db: Session = Depends(get_db)) -> ChatAnswer:
-    grounded = run_grounded_query(db, question)
-    return ChatAnswer(answer=grounded.answer, citations=grounded.citations,tool_used=grounded.tool_used)
+    grounded = run_grounded_query_loop(db, question)
+    return ChatAnswer(
+        answer=grounded.answer,
+        citations=grounded.citations,
+        tool_used=", ".join(grounded.tool_used) if grounded.tool_used else None,
+    )
 
 
 @app.get("/chat/order/{internal_order_id}", response_model=ChatAnswer)
@@ -126,9 +130,12 @@ def chat_failed_shipments(db: Session = Depends(get_db)) -> ChatAnswer:
     return chat_tools.get_failed_shipments(db)
 
 
-@app.post("/chat/query", response_model=GroundedChatResponse)
-def chat_query(payload: ChatQueryRequest, db: Session = Depends(get_db)) -> GroundedChatResponse:
-    return run_grounded_query(db, payload.question)
+@app.post("/chat/query", response_model=MultiStepGroundedChatResponse)
+def chat_query(
+    payload: ChatQueryRequest,
+    db: Session = Depends(get_db),
+) -> MultiStepGroundedChatResponse:
+    return run_grounded_query_loop(db, payload.question)
 
 
 @app.post("/agent/run", response_model=AgentResult)

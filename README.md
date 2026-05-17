@@ -1,157 +1,111 @@
-# AI-Helper — D2C Operations Assistant (v0)
+## [Note : The content and language was fine tuned but was written by myself]
 
-Helps operators reason over Shopify, Shiprocket, and Razorpay data with **normalization**, **entity mapping**, and **provenance-backed** answers suitable for LLM chat tools.
+# What you built. 5-line architecture summary
 
-## Quickstart
+- A FastAPI backend system (skeleton initially generated using prompts from Promts_Used/v0_rough_design.md). Out of all the endpoints, the two most important are /sync and /chat/rto.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # optional; defaults work for local SQLite
-uvicorn api.main:app --reload
-```
+- The /sync endpoint extracts data from three connectors — Razorpay, Shiprocket, and Shopify — to generate normalized tables, entity mapping tables, and provenance tables, which are later used for citations during query responses.
 
-- API docs: `http://127.0.0.1:8000/docs` (default uvicorn port)
-- SQLite file: `data/app.db` (created on startup; seeded once when empty)
+- The /chat/rto endpoint takes a user query, and the internal LLM agent processes it. Currently, it uses a hardcoded loop of 3 iterations to imitate a true agent-loop scenario while avoiding context overflows. The LLM call is passed a prompt and tools from a filtered list, currently selected using simple parsing logic to minimize context pollution (observed worse results when passing all tools together). The selected tool is then called, which deterministically fetches data from normalized tables along with citations for those rows from the provenance table (Ref_eg: /Users/tusharmacmini/Documents/Projects/AI-Helper/artifacts/citation_example_rto_query.md).
 
-## Architecture overview
+- If the LLM chooses a specific iteration as the final answer, validation verifies the existence of citations; otherwise, it returns a general response stating that no deterministic answer from the data was used.
 
-The service is a **modular FastAPI** app with four layers:
+- The current DB setup uses local SQLite for easier setup, since local PostgreSQL was slowing down my PC while running local LLMs in parallel. Swagger UI (prepackaged with FastAPI) was used for API testing.
 
-1. **Connectors** return **raw vendor-shaped JSON** (mocked in v0).
-2. **Normalization** converts raw payloads into **canonical tables** (`orders`, `shipments`, `payments`).
-3. **Mappings** link **external IDs** (e.g. `ORD-101`, `SHIP-778`) to **internal IDs** (`INT-ORD-…`).
-4. **Provenance** records **field-level lineage** (e.g. `orders.amount` ← `shopify.total_price`).
+# Connectors. Which 3. Why these 3.
 
-Downstream **chat tools** aggregate facts but attach **citations** from provenance so numeric claims stay auditable. The **RTO agent** reads normalized rows only and emits operational guidance (no notifications).
+The current system uses 3 connectors — Shopify, Shiprocket, and Razorpay.
 
-## Connector abstraction
+Shopify is used as the primary ecommerce/order source, Shiprocket is used for shipment and delivery related data, and Razorpay is used for payment related information. These 3 were selected because together they cover most of the important flows required for ecommerce analytics and RTO related reasoning — orders, payments, shipping, delivery status, and returns.
 
-`connectors/base.py` defines `BaseConnector` with `fetch_orders`, `fetch_shipments`, and `fetch_payments`. Each vendor implements all three; vendors without a dataset return empty lists.
+Another reason for choosing these was that all 3 provide relatively clean APIs and are commonly used together in many Indian ecommerce setups, making them good connectors for testing cross-platform normalization, entity mapping, and provenance tracking scenarios.
 
-**Rule:** connectors never normalize. They only yield **source-native** structures so normalization rules stay centralized and testable.
 
-## Universal schema
+# Schema. Why this shape
 
-SQLAlchemy models in `db/models.py` implement the normalized graph:
+- The schema was intentionally kept small and normalized around the core ecommerce flow — orders, shipments, and payments — since most analytics and RTO related queries can be derived from these entities.
 
-- **orders** — canonical commerce order (internal PK, merchant, customer, amount, currency, status, timestamps).
-- **shipments** — logistics rows referencing `orders.internal_order_id`.
-- **payments** — payment rows referencing the same internal order key.
-- **entity_mappings** — many external IDs → one internal entity per type.
-- **provenance** — which source field populated each normalized column.
+- orders, shipments, and payments tables act as canonical normalized tables generated from connector data. Instead of directly querying connector-specific schemas, all tools operate on these normalized entities to keep deterministic tool logic simpler and connector independent.
 
-## Entity mapping strategy
+- The entity_mappings table was added to solve cross-platform identity resolution. Different systems use different IDs for the same logical entity, so this table maps external connector IDs to stable internal IDs used across the system.
 
-Inbound rows use different identifiers (`id`, `shipment_id`, `payment_id`) but often share a **human order code** (here: `ORD-101`). During sync:
+- The provenance table was added mainly for lineage and citations. Since the system is designed around grounded responses, every important normalized field can be traced back to the original source system, source field, and row id. These provenance rows are later converted into citations during chat responses.
 
-1. Shopify orders create **`entity_mappings` rows** (`entity_type=order`, `source=shopify`, `external_id=ORD-101`).
-2. Shiprocket resolves `linked_order_id` against **`entity_type=order`** mappings to find `internal_order_id`.
-3. Razorpay resolves `order_ref` the same way before inserting `payments`.
+- Pydantic schemas were kept separate from SQLAlchemy models so API responses remain validated and decoupled from ORM objects. The tool execution and chat response schemas were also designed to enforce structured deterministic outputs with citations, instead of allowing free-form LLM generated responses.
 
-Shipments and payments also receive their own mapping rows (`entity_type=shipment|payment`) for idempotent re-sync.
+# Chat. The tool schema you exposed. How citation works.
 
-## Provenance strategy
+The chat system currently works as a bounded agent loop where the LLM decides whether to call a deterministic tool or stop with a final answer. Instead of exposing raw DB access, only structured tool schemas are exposed to the LLM using Pydantic models like ToolCall, AgentAction, and ToolExecutionResult.
 
-Each normalized field write appends provenance rows capturing:
+The exposed tool schema mainly contains:
 
-- `internal_entity_id` (order/shipment/payment internal key)
-- `field_name` (normalized column)
-- `source_system` / `source_field` / `source_row_id` (vendor coordinates)
-- `synced_at`
+* tool name
+* validated arguments
+* structured deterministic output
+* optional filters/calculation metadata
+* records used
+* citations
 
-This enables **AI citations**: chat endpoints return `answer` plus `citations[]` pointing back to concrete source cells.
+The reason for keeping tool outputs structured instead of natural language was to reduce hallucinations and make validation easier before generating the final response.
 
-## Chat citation system
+Citations work through the provenance table. During /sync, whenever normalized fields are populated from connector data, provenance rows are also written containing:
 
-`chat/tools.py` implements:
+* internal entity id
+* source system
+* source field
+* source row id
+* synced timestamp
 
-- `get_total_revenue`
-- `get_rto_orders`
-- `get_order_by_id`
-- `get_failed_shipments`
+Later during tool execution, after deterministic data is fetched from normalized tables, the related provenance rows are queried using functions like latest_provenance_for_entities(). These provenance rows are then converted into citation objects and attached to the tool result.
 
-Numeric aggregates pull **latest provenance** for contributing entities so responses avoid “uncited numbers.” If no rows exist yet, revenue answers are phrased **without invented totals**.
+During the final validation step, if the LLM selects a deterministic tool result as the final answer, the system verifies that citations exist for the claims/data used. If citations are missing, it falls back to a general ungrounded response instead of pretending the answer came from deterministic data.
 
-HTTP wrappers: `GET /chat/revenue`, `GET /chat/rto`, `GET /chat/order/{id}`, `GET /chat/failed-shipments`.
+# Agent. What it does. Why this one.
 
-## Agent design
+- What is does
+Right now the agent uses a bounded hardcoded loop of 3 iterations to imitate a true agent-loop workflow while avoiding large context growth and unstable reasoning behaviour from local LLMs. In each step, the LLM receives the user query, previous tool outputs, available filtered tools, and the current loop context, after which it decides whether to call another tool, continue reasoning using existing outputs, or stop and generate the final answer.
 
-`agents/rto_agent.py` scans joined orders + shipments for **RTO** patterns above a **minimum order amount**, then returns structured JSON:
+- Why this one
+The reason for using this approach instead of a single-shot prompt was that multi-step queries performed better when the model could iteratively reason over smaller structured outputs. At the same time, exposing all tools together caused noticeable context pollution and worse tool selection, so a filtered tool exposure strategy was added.It keeps most computation deterministic while still allowing flexible query handling from the LLM side
 
-- trigger reason
-- analyzed cohort
-- recommendation text
-- stepwise run logs
+# Scale. How this goes from 1 merchant to 10,000. What breaks. What you've built to absorb it.
 
-**No outbound notifications** — analysis only, suitable for cron or workflow triggers later.
+- Right now the system is designed more as a strong v0 architecture with clear scaling boundaries already identified instead of trying to prematurely optimize everything from day 1. The current setup can handle roughly ~100 merchants and ~100 calls/min on local SQLite with a single FastAPI instance, but the main scaling bottlenecks identified were database concurrency, provenance table explosion, synchronous sync workflows, missing cache layers, and lack of merchant isolation.
 
-## Scale considerations (v0 vs production)
+- The first thing that breaks while scaling towards 10,000 merchants is SQLite itself since it allows only limited concurrent writes and no proper connection pooling or read replicas. To absorb this, the planned migration is towards RDS PostgreSQL with Multi-AZ setup, read replicas, and PgBouncer/RDS Proxy for connection pooling.
 
-v0 optimizes for **clarity** and **single-node demos**:
+- Another major bottleneck identified was provenance growth. Since provenance is written at field level, repeated syncs can generate billions of rows over time. To handle this, provenance partitioning by merchant and date was planned so queries only scan relevant partitions instead of full table scans.
 
-- SQLite + synchronous FastAPI handlers
-- Full connector refresh via `POST /sync`
-- Provenance append model (audit-friendly; compaction is a later concern)
+- The second large issue was repeated expensive queries and Bedrock token costs. To reduce this, Redis/ElastiCache was introduced as a caching layer with TTL-based cache invalidation triggered after sync completion events.
 
-## Failure modes
+- The current /sync endpoint is synchronous, which becomes problematic at scale since connector fetches block API responsiveness. The scaling design moves sync processing into async SQS + Lambda workers so API requests return immediately while sync jobs execute independently in the background.
 
-- **Ordering**: shipments/payments **must** run after orders; otherwise resolution raises a clear error.
-- **Re-sync**: repeated syncs **upsert** core rows and **append** provenance (historical growth).
-- **Ambiguous external IDs**: if two merchants shared storefront codes, you would scope mappings by `merchant_id` (future hardening).
+- Merchant isolation was another important scaling and security concern. The future architecture adds merchant_id scoped partitioning and row-level security (RLS) policies so queries automatically stay tenant isolated.
 
-## What breaks at ~10k merchants
+- At infra level, scaling is handled using AWS Fargate auto-scaling, Redis clusters, RDS replicas, Lambda workers, and CloudWatch based monitoring/alerts. The idea was to keep deterministic tool execution and normalized schemas unchanged while horizontally scaling infrastructure components around them instead of redesigning the entire architecture later.
 
-SQLite and single-threaded ingestion will bottleneck on:
+# Eval. Where it breaks
 
-- write contention on `provenance` / `entity_mappings`
-- full-table scans for analytics-style queries
-- lack of **tenant partitioning** and **connector rate-limit backoff** at fleet scale
+- A big input from connectors will overload the local sqlite tables
 
-## Why SQLite for v0
+- The timeout for local llm call is currently set to 120 seconds which in some queries was timing out along with the parsing logic to pass tools currently focuses on keyword not sematic which missed imp tools during llm call.
 
-- zero ops, file-based, perfect for **portable demos** and **integration tests**
-- SQLAlchemy models port cleanly to PostgreSQL later
+- [Future_Plan]The architecture already stores structured traces (AgentStepLog, ToolExecutionResult, provenance citations), which makes future eval systems easier to build without redesigning the whole pipeline later
 
-## Evolution path (PostgreSQL + events)
+# Hours spent. Across how many days or sessions
 
-Reasonable upgrades:
+- Around 12 hours across 5 session which had 2 session of 4 hours[weekends] and 2 of about 2 hours.
 
-- **PostgreSQL** for concurrent writers, indexes, and JSONB raw archives
-- **Webhook ingestion** + **idempotent event IDs** instead of polling
-- **Async workers** (Celery/RQ/Arq) for connector calls with **retries** and **rate limits**
-- **Event-driven pipelines** (Kafka/Rabbit/SQS) for `order.updated`-style fan-out
-- **Per-merchant partitions** (schema or table routing) and **read replicas** for BI
+# What you'd do with another week.
 
-This repository **does not** implement distributed orchestration — it sketches the **seams** (connectors, normalization, sync, citations) where those components attach.
+- With another week, I would mainly focus on improving reliability and evaluation instead of adding more features. Right now the core architecture works end-to-end, but the biggest gaps are around production stability, eval quality, and scaling readiness.
 
-## HTTP endpoints
+- The first thing I would improve is the eval pipeline by creating a proper golden dataset for tool routing, citation validation, and multi-step agent reasoning. Currently validation is mostly heuristic based, so adding replayable agent traces and automated scoring would make debugging and benchmarking much easier.
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/orders` | List normalized orders |
-| GET | `/shipments` | List shipments |
-| GET | `/payments` | List payments |
-| POST | `/sync` | Run full mocked ingestion |
-| GET | `/chat/revenue` | Revenue + citations |
-| GET | `/chat/rto` | RTO order count + citations |
-| GET | `/chat/order/{internal_order_id}` | Order detail + citations |
-| GET | `/chat/failed-shipments` | Failed/RTO-class shipments + citations |
-| POST | `/agent/run` | RTO monitoring agent |
+- I would also replace the current simple filtered-tool parsing logic with embedding or retrieval-based tool selection since context pollution becomes worse as tool count increases.
 
-## Project layout
+- On the infra side, I would start migrating from SQLite towards PostgreSQL and begin implementing provenance partitioning because provenance growth becomes one of the biggest long-term bottlenecks in this architecture.
 
-```
-connectors/     # Raw SaaS payloads
-db/             # Engine, models, CRUD, seed
-services/       # Normalization, sync, mapping/provenance helpers
-chat/           # LLM-facing tools
-agents/         # Autonomous monitors (v0: RTO)
-api/main.py     # FastAPI app
-data/app.db     # SQLite (generated)
-```
+- Another thing I would improve is observability. Right now traces exist structurally through run logs and tool outputs, but I would integrate something like Langfuse/OpenTelemetry to visualize complete agent execution paths, tool calls, retries, and latency.
 
-## License / usage
-
-Internal prototype scaffolding — adapt licensing as needed for your organization.
+- Finally, I would improve sync performance by moving connector sync fully async using queues/workers instead of synchronous execution, since that becomes important very quickly once merchant count starts increasing.

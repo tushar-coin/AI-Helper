@@ -1,0 +1,234 @@
+{
+  "test_cases": [
+    {
+      "id": "test_001_rto_revenue",
+      "name": "RTO Orders Revenue Query",
+      "query": "Show me the total revenue for RTO orders above 1000",
+      "expected_tools": ["get_rto_orders", "get_revenue_for_order_ids"],
+      "expected_steps": 2,
+      "should_have_citations": true,
+      "min_citations": 2,
+      "source_systems": ["shopify", "shiprocket"],
+      "response": {
+        "answer": "There are 2 orders with an RTO shipment. Revenue for those 2 orders is INR 5700.0.",
+        "citations": [
+          {
+            "internal_entity_id": "INT-ORD-4b71601a48",
+            "source_system": "shopify",
+            "source_field": "total_price",
+            "source_row_id": "ORD-103",
+            "field_name": "amount"
+          },
+          {
+            "internal_entity_id": "INT-ORD-38221bbfb4",
+            "source_system": "shopify",
+            "source_field": "total_price",
+            "source_row_id": "ORD-101",
+            "field_name": "amount"
+          },
+          {
+            "internal_entity_id": "INT-SHIP-e62fa3eb58",
+            "source_system": "shiprocket",
+            "source_field": "shipment_status",
+            "source_row_id": "SHIP-780",
+            "field_name": "shipment_status"
+          },
+          {
+            "internal_entity_id": "INT-SHIP-bf0c4d5ff9",
+            "source_system": "shiprocket",
+            "source_field": "shipment_status",
+            "source_row_id": "SHIP-778",
+            "field_name": "shipment_status"
+          }
+        ],
+        "tool_used": "get_rto_orders, get_revenue_for_order_ids"
+      },
+      "verification": {
+        "answer_claims": [
+          {
+            "claim": "2 orders with RTO",
+            "proof_citations": [2, 3]
+          },
+          {
+            "claim": "Revenue 5700",
+            "proof_citations": [0, 1],
+            "calculation": "1200 + 4500"
+          }
+        ],
+        "source_data": {
+          "shopify": [
+            {
+              "id": "ORD-101",
+              "external_id": "ORD-101",
+              "customer_name": "Rahul",
+              "total_price": "1200.00",
+              "order_status": "paid"
+            },
+            {
+              "id": "ORD-103",
+              "external_id": "ORD-103",
+              "customer_name": "Amit",
+              "total_price": "4500.00",
+              "order_status": "paid"
+            }
+          ],
+          "shiprocket": [
+            {
+              "shipment_id": "SHIP-778",
+              "linked_order_id": "ORD-101",
+              "shipment_status": "RTO",
+              "courier_name": "Delhivery",
+              "shipped_at": "2026-05-11T08:00:00"
+            },
+            {
+              "shipment_id": "SHIP-780",
+              "linked_order_id": "ORD-103",
+              "shipment_status": "RTO",
+              "courier_name": "Delhivery",
+              "shipped_at": "2026-05-09T11:00:00"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "test_002_shipment_details",
+      "name": "Single Shipment Lookup",
+      "query": "What is the status and courier for shipment SHIP-778?",
+      "expected_tools": ["get_shipment_by_id"],
+      "expected_steps": 1,
+      "should_have_citations": true,
+      "min_citations": 2,
+      "source_systems": ["shiprocket"],
+      "expected_response_structure": {
+        "answer": "string",
+        "citations": [
+          {
+            "internal_entity_id": "string (INT-SHIP-*)",
+            "source_system": "shiprocket",
+            "source_field": "string",
+            "source_row_id": "SHIP-778",
+            "field_name": "string"
+          }
+        ],
+        "tool_used": "get_shipment_by_id"
+      },
+      "assertions": [
+        "answer should mention 'RTO'",
+        "answer should mention 'Delhivery'",
+        "citations[0].source_row_id == 'SHIP-778'",
+        "citations[1].source_row_id == 'SHIP-778'",
+        "All citations should have source_system='shiprocket'"
+      ]
+    },
+    {
+      "id": "test_003_customer_orders",
+      "name": "Customer Order Summary",
+      "query": "Show me all orders for Rahul",
+      "expected_tools": ["get_customer_order_summary"],
+      "expected_steps": 1,
+      "should_have_citations": true,
+      "min_citations": 1,
+      "source_systems": ["shopify"],
+      "expected_response_fields": {
+        "answer": "must contain customer name 'Rahul'",
+        "citations": "must reference ORD-101 or similar",
+        "tool_used": "get_customer_order_summary"
+      }
+    },
+    {
+      "id": "test_004_total_revenue",
+      "name": "Total Revenue Aggregation",
+      "query": "What is the total revenue?",
+      "expected_tools": ["get_total_revenue"],
+      "expected_steps": 1,
+      "should_have_citations": true,
+      "citation_pattern": "aggregation",
+      "source_systems": ["shopify"],
+      "validation_rules": [
+        "Answer should be a single number",
+        "Citations should be present",
+        "Number of citations >= 2 (multiple orders)",
+        "All citations should be from shopify",
+        "All citations should have source_field='total_price'"
+      ]
+    },
+    {
+      "id": "test_005_failed_shipments",
+      "name": "Failed Shipments Count",
+      "query": "How many failed shipments do I have?",
+      "expected_tools": ["get_failed_shipments"],
+      "expected_steps": 1,
+      "should_have_citations": true,
+      "source_systems": ["shiprocket"],
+      "citation_requirement": "MUST cite shipment_status field for failed shipments",
+      "valid_statuses": ["RTO", "lost", "failed", "undelivered"]
+    }
+  ],
+  "citation_audit_rules": [
+    {
+      "rule": "no_uncited_numbers",
+      "description": "No numerical claim without at least one citation",
+      "severity": "CRITICAL",
+      "example_failure": {
+        "answer": "You have 5 RTO orders",
+        "citations": []
+      }
+    },
+    {
+      "rule": "no_hallucinated_ids",
+      "description": "All source_row_id values must exist in actual source data",
+      "severity": "CRITICAL",
+      "example_failure": {
+        "answer": "Order ORD-999 has revenue 1000",
+        "citations": [{"source_row_id": "ORD-999"}]
+      }
+    },
+    {
+      "rule": "correct_source_system",
+      "description": "source_system must match where the data actually comes from",
+      "severity": "CRITICAL",
+      "correct_mapping": {
+        "orders": "shopify",
+        "shipments": "shiprocket",
+        "payments": "razorpay"
+      }
+    },
+    {
+      "rule": "internal_id_consistency",
+      "description": "Each internal_entity_id must map to exactly one external_id",
+      "severity": "HIGH",
+      "example": "INT-ORD-38221bbfb4 → ORD-101 (always)"
+    },
+    {
+      "rule": "field_name_accuracy",
+      "description": "source_field must match actual field name in source system",
+      "severity": "HIGH",
+      "valid_fields": {
+        "shopify": ["total_price", "order_status", "customer_name"],
+        "shiprocket": ["shipment_status", "courier_name", "shipped_at"],
+        "razorpay": ["amount", "payment_status", "payment_method"]
+      }
+    },
+    {
+      "rule": "no_stale_citations",
+      "description": "Citations should reference data synced recently",
+      "severity": "MEDIUM",
+      "max_age_hours": 24,
+      "warning_age_hours": 12
+    }
+  ],
+  "test_execution_guide": {
+    "step_1_query": "Run the query against the system",
+    "step_2_extract": "Extract response and citations",
+    "step_3_verify_form": "Verify citations have all required fields",
+    "step_4_verify_data": "Check each citation against source data",
+    "step_5_verify_math": "For aggregations, verify the numbers add up",
+    "step_6_report": "Generate pass/fail report"
+  },
+  "expected_outcomes": {
+    "pass": "All assertions passed, citations verified, answer trusted",
+    "warn": "Minor issues detected (e.g., stale data), but answer is usable",
+    "fail": "Critical citations issues found, answer cannot be trusted"
+  }
+}
